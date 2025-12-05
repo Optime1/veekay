@@ -1,3 +1,10 @@
+#define _USE_MATH_DEFINES
+#include <cmath>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include <cstdint>
 #include <climits>
 #include <vector>
@@ -12,9 +19,14 @@
 
 namespace {
 
-constexpr float camera_fov = 70.0f;
+float camera_fov = 70.0f;
 constexpr float camera_near_plane = 0.01f;
 constexpr float camera_far_plane = 100.0f;
+
+float rotation_speed_x = 0.05f;
+float rotation_speed_y = 0.05f;
+float rotation_speed_z = 0.05f;
+double global_time = 0.0;
 
 struct Matrix {
 	float m[4][4];
@@ -51,8 +63,9 @@ VulkanBuffer vertex_buffer;
 VulkanBuffer index_buffer;
 
 Vector model_position = {0.0f, 0.0f, 5.0f};
-float model_rotation;
-Vector model_color = {0.5f, 1.0f, 0.7f };
+float model_rotation_x = 0.0f;
+float model_rotation_y = 0.0f;
+float model_rotation_z = 0.0f;
 bool model_spin = true;
 
 Matrix identity() {
@@ -435,28 +448,51 @@ void initialize() {
 		}
 	}
 
-	// TODO: You define model vertices and create buffers here
-	// TODO: Index buffer has to be created here too
-	// NOTE: Look for createBuffer function
+	constexpr int major_segments = 20;
+	constexpr int minor_segments = 10;
+	constexpr float major_radius = 1.0f;
+	constexpr float minor_radius = 0.3f;
 
-	// (v0)------(v1)
-	//  |  \       |
-	//  |   `--,   |
-	//  |       \  |
-	// (v3)------(v2)
-	Vertex vertices[] = {
-		{{-1.0f, -1.0f, 0.0f}},
-		{{1.0f, -1.0f, 0.0f}},
-		{{1.0f, 1.0f, 0.0f}},
-		{{-1.0f, 1.0f, 0.0f}},
-	};
+	constexpr int total_vertices = major_segments * minor_segments;
+	constexpr int total_indices = 6 * major_segments * minor_segments;
 
-	uint32_t indices[] = { 0, 1, 2, 2, 3, 0 };
+	std::vector<Vertex> vertices(total_vertices);
+	std::vector<uint32_t> indices;
 
-	vertex_buffer = createBuffer(sizeof(vertices), vertices,
+	for (int i = 0; i < major_segments; ++i) {
+		for (int j = 0; j < minor_segments; ++j) {
+			const float u = (float)i / major_segments * 2.0f * M_PI;
+			const float v = (float)j / minor_segments * 2.0f * M_PI;
+
+			const float x = (major_radius + minor_radius * cosf(v)) * cosf(u);
+			const float y = minor_radius * sinf(v);
+			const float z = (major_radius + minor_radius * cosf(v)) * sinf(u);
+
+			vertices[i * minor_segments + j] = {{x, y, z}};
+		}
+	}
+
+	for (int i = 0; i < major_segments; ++i) {
+		for (int j = 0; j < minor_segments; ++j) {
+			uint32_t a = i * minor_segments + j;
+			uint32_t b = i * minor_segments + (j + 1) % minor_segments;
+			uint32_t c = ((i + 1) % major_segments) * minor_segments + j;
+			uint32_t d = ((i + 1) % major_segments) * minor_segments + (j + 1) % minor_segments;
+
+			indices.push_back(a);
+			indices.push_back(b);
+			indices.push_back(c);
+
+			indices.push_back(b);
+			indices.push_back(d);
+			indices.push_back(c);
+		}
+	}
+
+	vertex_buffer = createBuffer(vertices.size() * sizeof(Vertex), vertices.data(),
 	                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 
-	index_buffer = createBuffer(sizeof(indices), indices,
+	index_buffer = createBuffer(indices.size() * sizeof(uint32_t), indices.data(),
 	                            VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
 }
 
@@ -474,19 +510,38 @@ void shutdown() {
 }
 
 void update(double time) {
+	global_time = time;
+
 	ImGui::Begin("Controls:");
 	ImGui::InputFloat3("Translation", reinterpret_cast<float*>(&model_position));
-	ImGui::SliderFloat("Rotation", &model_rotation, 0.0f, 2.0f * M_PI);
+	ImGui::SliderFloat("Rotation X", &model_rotation_x, 0.0f, 2.0f * M_PI);
+	ImGui::SliderFloat("Rotation Y", &model_rotation_y, 0.0f, 2.0f * M_PI);
+	ImGui::SliderFloat("Rotation Z", &model_rotation_z, 0.0f, 2.0f * M_PI);
 	ImGui::Checkbox("Spin?", &model_spin);
-	// TODO: Your GUI stuff here
+	ImGui::SliderFloat("FOV", &camera_fov, 10.0f, 120.0f);
+	ImGui::SliderFloat("Rotation Speed X", &rotation_speed_x, -0.1f, 0.1f);
+	ImGui::SliderFloat("Rotation Speed Y", &rotation_speed_y, -0.1f, 0.1f);
+	ImGui::SliderFloat("Rotation Speed Z", &rotation_speed_z, -0.1f, 0.1f);
 	ImGui::End();
 
 	// NOTE: Animation code and other runtime variable updates go here
 	if (model_spin) {
-		model_rotation = float(time);
+		float rotation_increment_x = rotation_speed_x;
+		float rotation_increment_y = rotation_speed_y;
+		float rotation_increment_z = rotation_speed_z;
+		
+		model_rotation_x += rotation_increment_x;
+		model_rotation_y += rotation_increment_y;
+		model_rotation_z += rotation_increment_z;
 	}
 
-	model_rotation = fmodf(model_rotation, 2.0f * M_PI);
+	model_rotation_x = fmodf(model_rotation_x, 2.0f * M_PI);
+	model_rotation_y = fmodf(model_rotation_y, 2.0f * M_PI);
+	model_rotation_z = fmodf(model_rotation_z, 2.0f * M_PI);
+	
+	if (model_rotation_x < 0.0f) model_rotation_x += 2.0f * M_PI;
+	if (model_rotation_y < 0.0f) model_rotation_y += 2.0f * M_PI;
+	if (model_rotation_z < 0.0f) model_rotation_z += 2.0f * M_PI;
 }
 
 void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
@@ -530,7 +585,6 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 		// NOTE: Use our new shiny graphics pipeline
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-
 		// NOTE: Use our quad vertex buffer
 		VkDeviceSize offset = 0;
 		vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer.buffer, &offset);
@@ -539,16 +593,27 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 		vkCmdBindIndexBuffer(cmd, index_buffer.buffer, offset, VK_INDEX_TYPE_UINT32);
 
 		// NOTE: Variables like model_XXX were declared globally
+		const float time = float(global_time);
+		Vector color = {
+			0.5f + 0.5f * sinf(time), // R
+			0.5f + 0.5f * sinf(time + 2.0f * M_PI / 3.0f), // G
+			0.5f + 0.5f * sinf(time + 4.0f * M_PI / 3.0f)  // B
+		};
+
+		Matrix rotation_x = rotation({1.0f, 0.0f, 0.0f}, model_rotation_x);
+		Matrix rotation_y = rotation({0.0f, 1.0f, 0.0f}, model_rotation_y);
+		Matrix rotation_z = rotation({0.0f, 0.0f, 1.0f}, model_rotation_z);
+		Matrix combined_rotation = multiply(multiply(rotation_x, rotation_y), rotation_z);
+
 		ShaderConstants constants{
 			.projection = projection(
 				camera_fov,
 				float(veekay::app.window_width) / float(veekay::app.window_height),
 				camera_near_plane, camera_far_plane),
 
-			.transform = multiply(rotation({0.0f, 1.0f, 0.0f}, model_rotation),
-			                      translation(model_position)),
+			.transform = multiply(combined_rotation, translation(model_position)),
 
-			.color = model_color,
+			.color = color,
 		};
 
 		// NOTE: Update constant memory with new shader constants
@@ -556,15 +621,15 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 		                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 		                   0, sizeof(ShaderConstants), &constants);
 
-		// NOTE: Draw 6 indices (3 vertices * 2 triangles), 1 group, no offsets
-		vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+		// NOTE: Draw all indices
+		vkCmdDrawIndexed(cmd, 6 * 20 * 10, 1, 0, 0, 0);
 	}
 
 	vkCmdEndRenderPass(cmd);
 	vkEndCommandBuffer(cmd);
 }
 
-} // namespace
+}
 
 int main() {
 	return veekay::run({
