@@ -9,21 +9,23 @@ layout (location = 1) out vec3 f_normal;
 layout (location = 2) out vec2 f_uv;
 
 layout (binding = 0, std140) uniform SceneUniforms {
-	mat4 view_projection;
+    mat4 view_projection;
+    vec3 camera_position;
 };
 
 layout (binding = 1, std140) uniform ModelUniforms {
-	mat4 model;
-	vec3 albedo_color;
+    mat4 model;
+    mat4 normal_matrix; // Add normal matrix
+    // Material is included here in the struct
 };
 
 void main() {
-	vec4 position = model * vec4(v_position, 1.0f);
-	vec4 normal = model * vec4(v_normal, 0.0f);
+    vec4 world_position = model * vec4(v_position, 1.0);
+    vec4 world_normal = normal_matrix * vec4(v_normal, 0.0); // Transform normal using normal matrix
 
-	gl_Position = view_projection * position;
+    gl_Position = view_projection * world_position;
 
-	f_position = position.xyz;
-	f_normal = normal.xyz;
-	f_uv = v_uv;
+    f_position = world_position.xyz;
+    f_normal = world_normal.xyz; // Pass world-space normal
+    f_uv = v_uv;
 }
