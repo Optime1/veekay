@@ -26,21 +26,34 @@ set_target_properties(${PROJECT_NAME} PROPERTIES CXX_STANDARD_REQUIRED TRUE CXX_
 
 FetchContent_Declare(
 	glfw
-	GIT_REPOSITORY https://github.com/glfw/glfw.git
+	GIT_REPOSITORY https://github.com/glfw/glfw.git  
 	GIT_TAG 3.4
 )
 
 FetchContent_Declare(
 	vk-bootstrap
-	GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
+	GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap  
 	GIT_TAG v1.4.321
 )
 
 FetchContent_Declare(
 	imgui
-	GIT_REPOSITORY https://github.com/ocornut/imgui
+	GIT_REPOSITORY https://github.com/ocornut/imgui  
 	GIT_TAG v1.92.3
 )
+
+# --- Добавьте это в корень ---
+FetchContent_Declare(
+    lodepng
+    GIT_REPOSITORY https://github.com/lvandeve/lodepng
+)
+
+FetchContent_Declare(
+    tinyobjloader
+    GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
+    GIT_TAG v2.0.0rc13 # Или последний стабильный тег
+)
+# --- Конец добавления ---
 
 find_package(Vulkan REQUIRED)
 
@@ -49,7 +62,9 @@ set(GLFW_BUILD_EXAMPLES OFF)
 set(GLFW_BUILD_TESTS OFF)
 set(GLFW_BUILD_DOCS OFF)
 
-FetchContent_MakeAvailable(glfw vk-bootstrap imgui)
+# --- Обновите список ---
+FetchContent_MakeAvailable(glfw vk-bootstrap imgui lodepng tinyobjloader) # Добавьте lodepng и tinyobjloader
+# --- Конец обновления ---
 
 add_subdirectory(testbed)
 

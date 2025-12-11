@@ -6,12 +6,20 @@
 #include <fstream>
 #include <cmath>
 #include <algorithm> // For std::clamp
+#include <string> // For std::string
+#include <filesystem> // For path manipulation
 
 #include <veekay/veekay.hpp>
 
 #include <vulkan/vulkan_core.h>
 #include <imgui.h>
-#include <lodepng.h>
+#include <lodepng.h> // Include lodepng header
+
+// --- Define TINYOBJLOADER_IMPLEMENTATION before including ---
+#define TINYOBJLOADER_IMPLEMENTATION
+// --- End of definition ---
+
+#include "tiny_obj_loader.h" // Include tinyobjloader header
 
 namespace {
 
@@ -39,7 +47,7 @@ struct LightingUniforms {
 };
 
 struct Material {
-    veekay::vec3 albedo_color;
+    veekay::vec3 albedo_factor; // Factor to multiply texture color (or base color if no texture)
     float _pad0; // Pad to align to 16 bytes
     veekay::vec3 specular_color;
     float shininess;
@@ -127,6 +135,14 @@ inline namespace {
     float animation_time = 0.0f;
     float animation_amplitude = 3.0f; // How far the light moves
     float animation_speed = 2.0f;    // How fast the light moves
+
+    // --- Model Placement Variables ---
+    // Default values for initial placement
+    veekay::vec3 default_model_position = {30.0f, 0.0f, -30.0f}; // Changed from {0.0f, 0.0f, 0.0f}
+    float default_model_scale = 0.5f; // Changed from 0.1f
+    // Runtime adjustable values
+    veekay::vec3 model_position = default_model_position; // Start with default
+    float model_scale = default_model_scale; // Start with default
 }
 
 // --- Vulkan Objects ---
@@ -144,14 +160,12 @@ inline namespace {
     veekay::graphics::Buffer* scene_uniforms_buffer;
     veekay::graphics::Buffer* model_uniforms_buffer;
 
-    Mesh plane_mesh;
-    Mesh cube_mesh;
+    // --- Texturing Objects ---
+    veekay::graphics::Texture* loaded_texture = nullptr; // Loaded texture
+    VkSampler loaded_texture_sampler = VK_NULL_HANDLE;   // Loaded sampler
 
     veekay::graphics::Texture* missing_texture;
     VkSampler missing_texture_sampler;
-
-    veekay::graphics::Texture* texture;
-    VkSampler texture_sampler;
 }
 
 float toRadians(float degrees) {
@@ -222,6 +236,102 @@ veekay::mat4 Camera::view() const {
 veekay::mat4 Camera::view_projection(float aspect_ratio) const {
     auto projection = veekay::mat4::projection(fov, aspect_ratio, near_plane, far_plane);
     return view() * projection;
+}
+
+// --- Load OBJ Model (Updated) ---
+std::vector<Vertex> loadObjModel(const std::string& path, std::vector<uint32_t>& out_indices, std::string& out_texture_path, std::vector<tinyobj::material_t>& out_materials) {
+    tinyobj::attrib_t attrib;
+    std::vector<tinyobj::shape_t> shapes;
+    // std::vector<tinyobj::material_t> materials; // Pass materials vector from outside
+    std::string warn, err;
+
+    if (!tinyobj::LoadObj(&attrib, &shapes, &out_materials, &warn, &err, path.c_str())) {
+        std::cerr << "tinyobjloader error: " << err << std::endl;
+        return {}; // Return empty vector on error
+    }
+
+    // --- Extract texture path from materials (Updated) ---
+    out_texture_path = ""; // Initialize to empty
+    for (const auto& mat : out_materials) {
+        if (!mat.diffuse_texname.empty()) {
+            out_texture_path = mat.diffuse_texname; // Use the first diffuse texture found
+            std::cout << "Found diffuse texture in MTL: " << out_texture_path << std::endl;
+            // Optional: resolve relative path based on the .obj file path
+            // std::filesystem::path obj_path(path);
+            // std::filesystem::path tex_path(mat.diffuse_texname);
+            // out_texture_path = (obj_path.parent_path() / tex_path).string();
+            break; // Stop at first texture
+        }
+    }
+    if (out_texture_path.empty()) {
+        std::cout << "No diffuse texture found in MTL file." << std::endl;
+    }
+    // --- End of texture path extraction ---
+
+    std::vector<Vertex> vertices;
+    out_indices.clear(); // Clear the output vector
+
+    for (const auto& shape : shapes) {
+        for (const auto& index : shape.mesh.indices) {
+            Vertex vertex = {};
+
+            // Position
+            vertex.position.x = attrib.vertices[3 * index.vertex_index + 0];
+            vertex.position.y = attrib.vertices[3 * index.vertex_index + 1];
+            vertex.position.z = attrib.vertices[3 * index.vertex_index + 2];
+
+            // Normal (if available)
+            if (index.normal_index >= 0) {
+                vertex.normal.x = attrib.normals[3 * index.normal_index + 0];
+                vertex.normal.y = attrib.normals[3 * index.normal_index + 1];
+                vertex.normal.z = attrib.normals[3 * index.normal_index + 2];
+            } else {
+                // Set zero normal or calculate later if needed
+                vertex.normal = {0.0f, 0.0f, 0.0f};
+            }
+
+            // UV-coordinates (if available)
+            if (index.texcoord_index >= 0) {
+                vertex.uv.x = attrib.texcoords[2 * index.texcoord_index + 0];
+                vertex.uv.y = 1.0f - attrib.texcoords[2 * index.texcoord_index + 1]; // Flip Y
+            } else {
+                // Set (0,0) or default value
+                vertex.uv = {0.0f, 0.0f};
+            }
+
+            vertices.push_back(vertex);
+            out_indices.push_back(static_cast<uint32_t>(vertices.size() - 1));
+        }
+    }
+
+    return vertices;
+}
+
+// --- Load Texture from PNG (Updated) ---
+veekay::graphics::Texture* loadTextureFromPNG(const std::string& filename, VkCommandBuffer cmd) {
+    if (filename.empty()) {
+        std::cerr << "Texture filename is empty, cannot load." << std::endl;
+        return nullptr;
+    }
+    std::vector<unsigned char> image;
+    unsigned width, height;
+
+    unsigned error = lodepng::decode(image, width, height, filename);
+    if (error) {
+        std::cerr << "LodePNG error loading '" << filename << "': " << lodepng_error_text(error) << std::endl;
+        return nullptr;
+    }
+
+    // LodePNG loads to RGBA by default
+    auto* texture = new veekay::graphics::Texture(
+        cmd,
+        width,
+        height,
+        VK_FORMAT_R8G8B8A8_UNORM, // Or VK_FORMAT_B8G8R8A8_UNORM depending on byte order
+        image.data()
+    );
+
+    return texture;
 }
 
 // --- Load Shader Module ---
@@ -372,12 +482,12 @@ void initialize(VkCommandBuffer cmd) {
             VkDescriptorPoolSize pools[] = {
                 { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 8 },
                 { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = 8 },
-                { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 8 },
+                { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 8 }, // Add pool for sampler
             };
 
             VkDescriptorPoolCreateInfo info{
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                .maxSets = 2, // Need 2 sets now (Scene+Model and Lighting)
+                .maxSets = 2, // Need 2 sets now (Scene+Model+Lighting and Texture+Sampler)
                 .poolSizeCount = sizeof(pools) / sizeof(pools[0]),
                 .pPoolSizes = pools,
             };
@@ -394,6 +504,7 @@ void initialize(VkCommandBuffer cmd) {
                 { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT },
                 { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT },
                 { .binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT }, // Lighting
+                { .binding = 3, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT }, // Texture + Sampler
             };
 
             VkDescriptorSetLayoutCreateInfo info{
@@ -476,10 +587,109 @@ void initialize(VkCommandBuffer cmd) {
         nullptr,
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
+    // --- Load OBJ Model (Updated) ---
+    std::vector<uint32_t> obj_indices;
+    std::vector<tinyobj::material_t> loaded_materials; // Vector to store materials
+    std::string texture_path_from_mtl; // Variable to store texture path
+    std::vector<Vertex> obj_vertices = loadObjModel("model.obj", obj_indices, texture_path_from_mtl, loaded_materials); // Pass the path variable and materials vector
+
+    if (!obj_vertices.empty() && !obj_indices.empty()) {
+        Mesh obj_mesh;
+        obj_mesh.vertex_buffer = new veekay::graphics::Buffer(
+            obj_vertices.size() * sizeof(Vertex), obj_vertices.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        obj_mesh.index_buffer = new veekay::graphics::Buffer(
+            obj_indices.size() * sizeof(uint32_t), obj_indices.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+        obj_mesh.indices = uint32_t(obj_indices.size());
+
+        // --- Determine Material Properties from MTL (Updated) ---
+        Material model_material = Material{
+            .albedo_factor = {1.0f, 1.0f, 1.0f}, // Default factor
+            .specular_color = {0.5f, 0.5f, 0.5f},
+            .shininess = 32.0f
+        };
+
+        // If tinyobjloader loaded materials, you can access them here
+        if (!loaded_materials.empty()) {
+            const auto& mat = loaded_materials[0]; // Use the first material
+            if (!texture_path_from_mtl.empty()) {
+                 // If texture is present, set albedo factor to white (1,1,1)
+                 // The texture will provide the color
+                 model_material.albedo_factor = {1.0f, 1.0f, 1.0f};
+                 std::cout << "Using texture '" << texture_path_from_mtl << "', setting albedo factor to white." << std::endl;
+            } else {
+                 // If no texture, use the diffuse color from the material as the albedo factor
+                 model_material.albedo_factor = {mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]};
+                 std::cout << "No texture, using material diffuse color as albedo factor: (" << mat.diffuse[0] << ", " << mat.diffuse[1] << ", " << mat.diffuse[2] << ")" << std::endl;
+            }
+            // Use the specular color and shininess from the material if available
+            model_material.specular_color = {mat.specular[0], mat.specular[1], mat.specular[2]};
+            model_material.shininess = mat.shininess > 0.0f ? mat.shininess : 32.0f; // Default if shininess is 0
+        } else {
+             std::cout << "No materials found in MTL, using default material properties." << std::endl;
+        }
+        // --- End of Material Determination ---
+
+        // --- Add Model with Default Transform ---
+        models.emplace_back(Model{
+            .mesh = obj_mesh,
+            .transform = Transform{
+                .position = default_model_position, // Set initial position
+                .scale = {default_model_scale, default_model_scale, default_model_scale} // Set initial scale
+            },
+            .material = model_material
+        });
+        std::cout << "Loaded OBJ model with " << obj_vertices.size() << " vertices and " << obj_indices.size() << " indices.\n";
+    } else {
+        std::cerr << "Failed to load OBJ model or model is empty. Exiting.\n";
+        veekay::app.running = false;
+        return;
+    }
+
+
+    // --- Load Texture from MTL Path (Updated) ---
+    // Use the path found by tinyobjloader, or fallback to a default name if empty
+    std::string texture_to_load = texture_path_from_mtl.empty() ? "texture.png" : texture_path_from_mtl;
+    loaded_texture = loadTextureFromPNG(texture_to_load, cmd); // Load the texture from the MTL path or fallback
+    if (!loaded_texture) {
+         std::cerr << "Failed to load texture from '" << texture_to_load << "'. Exiting.\n";
+         // If texture loading fails, you might want to continue with just material colors
+         // For now, let's treat it as an error
+         veekay::app.running = false;
+         return;
+    }
+
+    // --- Create Sampler (Updated - Correct Field Order) ---
+    VkSamplerCreateInfo sampler_info{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = nullptr, // Явно указать, если не используется
+        .flags = 0,       // Явно указать, если не используются флаги
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR, // <-- Перемещено сюда
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .mipLodBias = 0.0f, // Явно указать, если не используется смещение LOD
+        .anisotropyEnable = VK_TRUE,
+        .maxAnisotropy = 16.0f,
+        .compareEnable = VK_FALSE, // <-- Перемещено сюда
+        .compareOp = VK_COMPARE_OP_ALWAYS, // <-- Перемещено сюда
+        .minLod = 0.0f, // Явно указать, если не используется
+        .maxLod = VK_LOD_CLAMP_NONE, // Или конкретное значение, если используется
+        .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+        .unnormalizedCoordinates = VK_FALSE,
+    };
+
+    if (vkCreateSampler(device, &sampler_info, nullptr, &loaded_texture_sampler) != VK_SUCCESS) {
+        std::cerr << "Failed to create texture sampler\n";
+        veekay::app.running = false;
+        return;
+    }
+
     // --- Initialize Lighting Data ---
     // Directional Light
-    lighting_uniforms.directional_light.direction = veekay::vec3::normalized({-0.2f, -1.0f, -0.3f});
-    lighting_uniforms.directional_light.color = {0.5f, 0.5f, 0.5f};
+    lighting_uniforms.directional_light.direction = veekay::vec3::normalized({0.0f, 1.0f, 0.0f}); // Changed to (0, 1, 0) - light from below
+    lighting_uniforms.directional_light.color = {1.0f, 1.0f, 1.0f}; // Changed to (255, 255, 255) in float
 
     // Point Lights
     lighting_uniforms.point_lights[0] = PointLight{
@@ -499,11 +709,27 @@ void initialize(VkCommandBuffer cmd) {
     };
     lighting_uniforms.num_point_lights = 3; // Set initial number of active lights
 
-    // --- Initialize Textures and Samplers ---
+    // --- Initialize Missing Texture and Sampler (fallback) (Updated) ---
     {
         VkSamplerCreateInfo info{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .magFilter = VK_FILTER_NEAREST,
+            .minFilter = VK_FILTER_NEAREST,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
             .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .mipLodBias = 0.0f,
+            .anisotropyEnable = VK_FALSE,
+            .maxAnisotropy = 1.0f,
+            .compareEnable = VK_FALSE,
+            .compareOp = VK_COMPARE_OP_ALWAYS,
+            .minLod = 0.0f,
+            .maxLod = VK_LOD_CLAMP_NONE,
+            .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            .unnormalizedCoordinates = VK_FALSE,
         };
 
         if (vkCreateSampler(device, &info, nullptr, &missing_texture_sampler) != VK_SUCCESS) {
@@ -520,129 +746,54 @@ void initialize(VkCommandBuffer cmd) {
         missing_texture = new veekay::graphics::Texture(cmd, 2, 2, VK_FORMAT_B8G8R8A8_UNORM, pixels);
     }
 
-    // --- Update Descriptor Sets ---
+    // --- Update Descriptor Sets (Updated) ---
     {
         VkDescriptorBufferInfo buffer_infos[] = {
             { .buffer = scene_uniforms_buffer->buffer, .offset = 0, .range = sizeof(SceneUniforms) },
-            { .buffer = model_uniforms_buffer->buffer, .offset = 0, .range = sizeof(ModelUniforms) },
-            { .buffer = lighting_uniforms_buffer->buffer, .offset = 0, .range = sizeof(LightingUniforms) }, // Lighting buffer
+            { .buffer = model_uniforms_buffer->buffer, .offset = 0, .range = sizeof(ModelUniforms) }, // Update range
+            { .buffer = lighting_uniforms_buffer->buffer, .offset = 0, .range = sizeof(LightingUniforms) },
+        };
+
+        VkDescriptorImageInfo image_info = { // Updated
+            .sampler = loaded_texture_sampler,
+            .imageView = loaded_texture->view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         };
 
         VkWriteDescriptorSet write_infos[] = {
             { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = descriptor_set, .dstBinding = 0, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &buffer_infos[0] },
-            { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = descriptor_set, .dstBinding = 1, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .pBufferInfo = &buffer_infos[1] },
-            { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = descriptor_set, .dstBinding = 2, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &buffer_infos[2] }, // Lighting write
+            { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = descriptor_set, .dstBinding = 1, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .pBufferInfo = &buffer_infos[1] }, // Update binding
+            { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = descriptor_set, .dstBinding = 2, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &buffer_infos[2] },
+            { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = descriptor_set, .dstBinding = 3, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &image_info }, // Updated
         };
 
         vkUpdateDescriptorSets(device, sizeof(write_infos) / sizeof(write_infos[0]), write_infos, 0, nullptr);
     }
-
-    // --- Initialize Meshes (Same as before) ---
-    {
-        std::vector<Vertex> vertices = {
-            {{-5.0f, 0.0f, 5.0f}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f}},
-            {{5.0f, 0.0f, 5.0f}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f}},
-            {{5.0f, 0.0f, -5.0f}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f}},
-            {{-5.0f, 0.0f, -5.0f}, {0.0f, -1.0f, 0.0f}, {0.0f, 1.0f}},
-        };
-
-        std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
-
-        plane_mesh.vertex_buffer = new veekay::graphics::Buffer(
-            vertices.size() * sizeof(Vertex), vertices.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-
-        plane_mesh.index_buffer = new veekay::graphics::Buffer(
-            indices.size() * sizeof(uint32_t), indices.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-
-        plane_mesh.indices = uint32_t(indices.size());
-    }
-
-    {
-        std::vector<Vertex> vertices = {
-            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f}}, {{+0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f}}, {{+0.5f, +0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f}}, {{-0.5f, +0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f}},
-            {{+0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}}, {{+0.5f, -0.5f, +0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}}, {{+0.5f, +0.5f, +0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}}, {{+0.5f, +0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-            {{+0.5f, -0.5f, +0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}}, {{-0.5f, -0.5f, +0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}}, {{-0.5f, +0.5f, +0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}}, {{+0.5f, +0.5f, +0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-            {{-0.5f, -0.5f, +0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}}, {{-0.5f, -0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}}, {{-0.5f, +0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}}, {{-0.5f, +0.5f, +0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-            {{-0.5f, -0.5f, +0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f}}, {{+0.5f, -0.5f, +0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f}}, {{+0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f}}, {{-0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 1.0f}},
-            {{-0.5f, +0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}, {{+0.5f, +0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}}, {{+0.5f, +0.5f, +0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}}, {{-0.5f, +0.5f, +0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}},
-        };
-
-        std::vector<uint32_t> indices = {
-            0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 8, 9, 10, 10, 11, 8, 12, 13, 14, 14, 15, 12, 16, 17, 18, 18, 19, 16, 20, 21, 22, 22, 23, 20,
-        };
-
-        cube_mesh.vertex_buffer = new veekay::graphics::Buffer(
-            vertices.size() * sizeof(Vertex), vertices.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-
-        cube_mesh.index_buffer = new veekay::graphics::Buffer(
-            indices.size() * sizeof(uint32_t), indices.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-
-        cube_mesh.indices = uint32_t(indices.size());
-    }
-
-    // --- Add Models to Scene (with Materials) ---
-    models.emplace_back(Model{
-        .mesh = plane_mesh,
-        .transform = Transform{},
-        .material = Material{
-            .albedo_color = {0.8f, 0.8f, 0.8f}, // Light gray
-            .specular_color = {0.5f, 0.5f, 0.5f}, // Gray specular
-            .shininess = 32.0f
-        }
-    });
-
-    models.emplace_back(Model{
-        .mesh = cube_mesh,
-        .transform = Transform{
-            .position = {-2.0f, -0.5f, -1.5f},
-        },
-        .material = Material{
-            .albedo_color = {1.0f, 0.0f, 0.0f}, // Red
-            .specular_color = {1.0f, 1.0f, 1.0f}, // White specular
-            .shininess = 64.0f
-        }
-    });
-
-    models.emplace_back(Model{
-        .mesh = cube_mesh,
-        .transform = Transform{
-            .position = {1.5f, -0.5f, -0.5f},
-        },
-        .material = Material{
-            .albedo_color = {0.0f, 1.0f, 0.0f}, // Green
-            .specular_color = {1.0f, 1.0f, 1.0f}, // White specular
-            .shininess = 16.0f
-        }
-    });
-
-    models.emplace_back(Model{
-        .mesh = cube_mesh,
-        .transform = Transform{
-            .position = {0.0f, -0.5f, 1.0f},
-        },
-        .material = Material{
-            .albedo_color = {0.0f, 0.0f, 1.0f}, // Blue
-            .specular_color = {1.0f, 1.0f, 1.0f}, // White specular
-            .shininess = 128.0f
-        }
-    });
 }
 
 void shutdown() {
     VkDevice& device = veekay::app.vk_device;
 
+    // Delete sampler
+    vkDestroySampler(device, loaded_texture_sampler, nullptr);
+
+    // Delete loaded texture
+    delete loaded_texture;
+
+    // Delete missing texture and sampler
     vkDestroySampler(device, missing_texture_sampler, nullptr);
     delete missing_texture;
 
-    delete cube_mesh.index_buffer;
-    delete cube_mesh.vertex_buffer;
-
-    delete plane_mesh.index_buffer;
-    delete plane_mesh.vertex_buffer;
-
+    // Delete buffers
     delete model_uniforms_buffer;
     delete scene_uniforms_buffer;
-    delete lighting_uniforms_buffer; // Delete lighting buffer
+    delete lighting_uniforms_buffer;
+
+    // Delete mesh buffers (if any were created)
+    for (auto& model : models) {
+        delete model.mesh.vertex_buffer;
+        delete model.mesh.index_buffer;
+    }
 
     vkDestroyDescriptorSetLayout(device, descriptor_set_layout, nullptr);
     vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
@@ -657,10 +808,23 @@ void update(double time) {
     // --- Update Animation Time ---
     animation_time = static_cast<float>(time); // Use actual application time
 
+    // --- ImGUI Controls ---
+    ImGui::Begin("Controls:");
+    ImGui::SliderFloat("Camera Pitch", &camera.rotation.x, static_cast<float>(-M_PI) / 2.0f + 0.1f, static_cast<float>(M_PI) / 2.0f - 0.1f);
+    // Sliders for runtime adjustment of model position and scale
+    ImGui::SliderFloat3("Model Position", model_position.elements, -20.0f, 20.0f); // Adjust range as needed
+    ImGui::SliderFloat("Model Scale", &model_scale, 0.01f, 10.0f); // Keep the scale slider
+    ImGui::End();
+
     ImGui::Begin("Lighting Controls");
     ImGui::Text("Directional Light");
+    // Color and Direction sliders for directional light
     ImGui::ColorEdit3("Dir Color", lighting_uniforms.directional_light.color.elements);
     ImGui::SliderFloat3("Dir Direction", lighting_uniforms.directional_light.direction.elements, -1.0f, 1.0f);
+    // Normalize the direction vector after editing
+    if (ImGui::IsItemDeactivated()) { // Update only after the item is finished being edited
+         lighting_uniforms.directional_light.direction = veekay::vec3::normalized(lighting_uniforms.directional_light.direction);
+    }
 
     ImGui::Text("Point Lights");
     ImGui::SliderInt("Num Point Lights", (int*)&lighting_uniforms.num_point_lights, 0, max_point_lights);
@@ -739,8 +903,12 @@ void update(double time) {
 
     std::vector<ModelUniforms> model_uniforms(models.size());
     for (size_t i = 0, n = models.size(); i < n; ++i) {
-        const Model& model = models[i];
+        Model& model = models[i]; // Use reference to allow modification
         ModelUniforms& uniforms = model_uniforms[i];
+
+        // Apply position and scale from UI to the model's transform before calculating the matrix
+        model.transform.position = model_position;
+        model.transform.scale = {model_scale, model_scale, model_scale};
 
         uniforms.model = model.transform.matrix();
         // Calculate normal matrix (transpose of inverse of upper 3x3 of model matrix)
@@ -754,7 +922,7 @@ void update(double time) {
         uniforms.normal_matrix = veekay::mat4::transpose(normal_mat3x3);
         uniforms.normal_matrix[3][0] = 0.0f; uniforms.normal_matrix[3][1] = 0.0f; uniforms.normal_matrix[3][2] = 0.0f; uniforms.normal_matrix[3][3] = 1.0f;
 
-        uniforms.material = model.material;
+        uniforms.material = model.material; // Assign material properties
     }
 
     // Update buffers

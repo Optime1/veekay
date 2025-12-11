@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-include(FetchContent)
+# include(FetchContent) # Больше не нужно здесь
 
 project(testbed LANGUAGES C CXX)
 
@@ -14,22 +14,20 @@ endif()
 
 find_package(Vulkan REQUIRED)
 
-FetchContent_Declare(
-	lodepng
-	GIT_REPOSITORY https://github.com/lvandeve/lodepng
-)
-
-FetchContent_MakeAvailable(lodepng)
+# FetchContent_Declare и FetchContent_MakeAvailable УДАЛЕНЫ отсюда
 
 target_link_libraries(${PROJECT_NAME} veekay Vulkan::Headers)
 
 target_sources(${PROJECT_NAME} PRIVATE
-	${lodepng_SOURCE_DIR}/lodepng.cpp
+	${lodepng_SOURCE_DIR}/lodepng.cpp # Используем переменную из корня
 )
 
+# --- Обновите список include директорий ---
 target_include_directories(${PROJECT_NAME} PRIVATE
-	${lodepng_SOURCE_DIR}
+	${lodepng_SOURCE_DIR}              # Используем переменную из корня
+	${tinyobjloader_SOURCE_DIR}        # Используем переменную из корня
 )
+# --- Конец обновления ---
 
 # Compile shaders
 find_program(GLSLC_FOUND glslc)

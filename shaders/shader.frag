@@ -2,7 +2,7 @@
 
 layout (location = 0) in vec3 f_position;
 layout (location = 1) in vec3 f_normal;
-layout (location = 2) in vec2 f_uv;
+layout (location = 2) in vec2 f_uv; // Receive UV coordinates
 
 layout (location = 0) out vec4 final_color;
 
@@ -16,12 +16,13 @@ struct DirectionalLight {
 
 struct PointLight {
     vec3 position;
-    float intensity; // Intensity for attenuation
+    float intensity; // Intensity for attenuation calculation
     vec3 color;
 };
 
 struct Material {
-    vec3 albedo_color;
+    vec3 albedo_factor; // Factor to multiply texture color (or base color if no texture)
+    float _pad0; // Pad to align to 16 bytes
     vec3 specular_color;
     float shininess;
 };
@@ -34,7 +35,7 @@ layout (binding = 0, std140) uniform SceneUniforms {
 layout (binding = 1, std140) uniform ModelUniforms {
     mat4 model;
     mat4 normal_matrix;
-    Material material;
+    Material material; // Include material properties
 };
 
 layout (binding = 2, std140) uniform LightingUniforms {
@@ -43,13 +44,17 @@ layout (binding = 2, std140) uniform LightingUniforms {
     uint num_point_lights;
 };
 
+// Declare the texture sampler
+layout (binding = 3) uniform sampler2D texSampler; // Binding 3 for texture + sampler
+
 // Blinn-Phong Lighting Functions
 vec3 calculateDirectionalLight(DirectionalLight light, vec3 normal, vec3 viewDir, Material mat) {
+    // Normalize light direction
     vec3 lightDir = normalize(-light.direction); // Direction *from* light *to* surface
 
     // Diffuse
     float diff = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = light.color * diff * mat.albedo_color;
+    vec3 diffuse = light.color * diff; // Don't multiply by albedo here yet
 
     // Specular (Blinn-Phong)
     vec3 halfwayDir = normalize(lightDir + viewDir);
@@ -64,7 +69,7 @@ vec3 calculatePointLight(PointLight light, vec3 fragPos, vec3 normal, vec3 viewD
 
     // Diffuse
     float diff = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = light.color * diff * mat.albedo_color;
+    vec3 diffuse = light.color * diff; // Don't multiply by albedo here yet
 
     // Specular (Blinn-Phong)
     vec3 halfwayDir = normalize(lightDir + viewDir);
@@ -73,12 +78,8 @@ vec3 calculatePointLight(PointLight light, vec3 fragPos, vec3 normal, vec3 viewD
 
     // Attenuation (Inverse Square Law)
     float distance = length(light.position - fragPos);
-    // Using intensity for attenuation: I / (constant + linear * d + quadratic * d^2)
-    // Simplified: intensity / (distance^2) -> I = intensity, const=0, linear=0, quad=1
-    // Or: intensity / (1 + 0.1*d + 0.01*d^2) etc. Adjust coefficients as needed.
-    float attenuation = light.intensity / (distance * distance);
-    // Optional: Clamping to prevent extreme intensity at very close distances
-    // attenuation = min(attenuation, 100.0); // Example clamp
+    // Ensure distance is not zero to avoid division by zero
+    float attenuation = light.intensity / max(distance * distance, 0.001); // Use intensity directly
 
     diffuse *= attenuation;
     specular *= attenuation;
@@ -87,7 +88,12 @@ vec3 calculatePointLight(PointLight light, vec3 fragPos, vec3 normal, vec3 viewD
 }
 
 void main() {
+    // Normalize the interpolated normal
     vec3 norm = normalize(f_normal);
+    // Check if normal is not zero (to catch potential issues)
+    if (length(norm) < 0.99) {
+        norm = vec3(0.0, 0.0, 1.0); // Fallback normal if input is invalid
+    }
     vec3 viewDir = normalize(camera_position - f_position);
 
     vec3 result = vec3(0.0); // Ambient term can be added here if desired
@@ -100,5 +106,13 @@ void main() {
         result += calculatePointLight(point_lights[i], f_position, norm, viewDir, material);
     }
 
-    final_color = vec4(result, 1.0);
+    // --- Sample Texture and Apply ---
+    vec4 tex_color = texture(texSampler, f_uv);
+    // Multiply the lighting result by the texture color and the material's albedo factor
+    vec3 lit_color = result * tex_color.rgb * material.albedo_factor;
+    // Use the texture's alpha channel (if needed)
+    float alpha = tex_color.a;
+
+    // Apply the final lit color
+    final_color = vec4(lit_color, alpha);
 }
