@@ -88,31 +88,23 @@ vec3 calculatePointLight(PointLight light, vec3 fragPos, vec3 normal, vec3 viewD
 }
 
 void main() {
-    // Normalize the interpolated normal
     vec3 norm = normalize(f_normal);
-    // Check if normal is not zero (to catch potential issues)
     if (length(norm) < 0.99) {
         norm = vec3(0.0, 0.0, 1.0); // Fallback normal if input is invalid
     }
     vec3 viewDir = normalize(camera_position - f_position);
 
-    vec3 result = vec3(0.0); // Ambient term can be added here if desired
+    vec3 result = vec3(0.0);
 
-    // Calculate Directional Light
     result += calculateDirectionalLight(directional_light, norm, viewDir, material);
 
-    // Calculate Point Lights
     for(uint i = 0u; i < num_point_lights; i++) {
         result += calculatePointLight(point_lights[i], f_position, norm, viewDir, material);
     }
 
-    // --- Sample Texture and Apply ---
     vec4 tex_color = texture(texSampler, f_uv);
-    // Multiply the lighting result by the texture color and the material's albedo factor
     vec3 lit_color = result * tex_color.rgb * material.albedo_factor;
-    // Use the texture's alpha channel (if needed)
     float alpha = tex_color.a;
 
-    // Apply the final lit color
     final_color = vec4(lit_color, alpha);
 }
