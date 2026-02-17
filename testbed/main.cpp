@@ -123,10 +123,10 @@ inline namespace {
     veekay::graphics::Buffer* lighting_uniforms_buffer = nullptr;
 
     // --- Animation Variables ---
-    bool animate_light = false;
+    bool animate_light = true;
     float animation_time = 0.0f;
     float animation_amplitude = 3.0f; // How far the light moves
-    float animation_speed = 2.0f;    // How fast the light moves
+    float animation_speed = 0.1f;    // How fast the light moves
 }
 
 // --- Vulkan Objects ---
@@ -476,28 +476,24 @@ void initialize(VkCommandBuffer cmd) {
         nullptr,
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
-    // --- Initialize Lighting Data ---
-    // Directional Light
-    lighting_uniforms.directional_light.direction = veekay::vec3::normalized({-0.2f, -1.0f, -0.3f});
-    lighting_uniforms.directional_light.color = {0.5f, 0.5f, 0.5f};
+    // --- Initialize Lighting Data (From screenshot) ---
+    // Directional Light (White color, direction 1,1,1)
+    lighting_uniforms.directional_light.direction = veekay::vec3::normalized({1.0f, 1.0f, 1.0f});
+    lighting_uniforms.directional_light.color = {1.0f, 1.0f, 1.0f}; // White (255,255,255)
 
     // Point Lights
     lighting_uniforms.point_lights[0] = PointLight{
-        .position = {0.0f, 0.0f, 0.0f}, // Initial position will be overridden by animation if active
-        .intensity = 10.0f, // Higher intensity for noticeable attenuation
-        .color = {1.0f, 0.0f, 0.0f} // Red
+        .position = {0.67f, 0.0f, 0.0f}, // X Pos from screenshot
+        .intensity = 21.724f,            // Intensity from screenshot
+        .color = {1.0f, 0.796f, 0.0f}    // Yellow/Orange (255,203,0)
     };
-    lighting_uniforms.point_lights[1] = PointLight{
-        .position = {2.0f, 1.0f, -2.0f},
-        .intensity = 10.0f,
-        .color = {0.0f, 1.0f, 0.0f} // Green
-    };
-    lighting_uniforms.point_lights[2] = PointLight{
-        .position = {-2.0f, 1.0f, 2.0f},
-        .intensity = 10.0f,
-        .color = {0.0f, 0.0f, 1.0f} // Blue
-    };
-    lighting_uniforms.num_point_lights = 3; // Set initial number of active lights
+    lighting_uniforms.num_point_lights = 1; // Only 1 point light
+
+    // --- Animation Variables (from screenshot) ---
+    animate_light = true;              // Animate Light 0 is checked
+    animation_amplitude = 3.0f;        // Anim Ampli: 3.000
+    animation_speed = 0.1f;            // Anim Speed: 0.100
+    animation_time = 0.0f;
 
     // --- Initialize Textures and Samplers ---
     {
@@ -715,9 +711,9 @@ void update(double time) {
             float delta_time = 1.0f / 60.0f; // Approximate, use actual delta time if available
             float speed = Camera::movement_speed * delta_time;
 
-            if (keyboard::isKeyDown(keyboard::Key::w))
-                camera.position += front * speed;
             if (keyboard::isKeyDown(keyboard::Key::s))
+                camera.position += front * speed;
+            if (keyboard::isKeyDown(keyboard::Key::w))
                 camera.position -= front * speed;
             if (keyboard::isKeyDown(keyboard::Key::d))
                 camera.position += right * speed;
