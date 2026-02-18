@@ -1,5 +1,6 @@
 #pragma once
 
+#define M_PI 3.14159265358979323846f
 #include <cstdint>
 #include <cmath>
 
@@ -408,6 +409,44 @@ union mat4 {
 				result[j][i] = matrix[i][j];
 			}
 		}
+
+		return result;
+	}
+	static mat4 lookAt(const vec3& eye, const vec3& target, const vec3& up) {
+		vec3 z = vec3::normalized(eye - target);
+		vec3 x = vec3::normalized(vec3::cross(up, z));
+		vec3 y = vec3::cross(z, x);
+
+		mat4 result{};
+		result[0][0] = x.x;
+		result[1][0] = x.y;
+		result[2][0] = x.z;
+		result[3][0] = -vec3::dot(x, eye);
+
+		result[0][1] = y.x;
+		result[1][1] = y.y;
+		result[2][1] = y.z;
+		result[3][1] = -vec3::dot(y, eye);
+
+		result[0][2] = z.x;
+		result[1][2] = z.y;
+		result[2][2] = z.z;
+		result[3][2] = -vec3::dot(z, eye);
+
+		result[3][3] = 1.0f;
+		return result;
+	}
+
+	static mat4 ortho(float left, float right, float bottom, float top, float zNear, float zFar) {
+		mat4 result{};
+		result[0][0] = 2.0f / (right - left);
+		result[1][1] = 2.0f / (bottom - top);
+		result[2][2] = 1.0f / (zNear - zFar);
+		result[3][3] = 1.0f;
+
+		result[3][0] = -(right + left) / (right - left);
+		result[3][1] = -(bottom + top) / (bottom - top);
+		result[3][2] = zNear / (zNear - zFar);
 
 		return result;
 	}

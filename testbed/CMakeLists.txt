@@ -1,33 +1,36 @@
 cmake_minimum_required(VERSION 3.20)
-# include(FetchContent) # Больше не нужно здесь
+include(FetchContent)
 
 project(testbed LANGUAGES C CXX)
 
 add_executable(${PROJECT_NAME} main.cpp)
 
-set_target_properties(${PROJECT_NAME} PROPERTIES CXX_STANDARD_REQUIRED TRUE CXX_STANDARD 20)
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_directory
+		${CMAKE_CURRENT_SOURCE_DIR}/../assets
+		${CMAKE_BINARY_DIR}/assets
+)
 
-if(MSVC)
-	target_compile_options(${PROJECT_NAME} PRIVATE /wd4201)
-	target_compile_definitions(${PROJECT_NAME} PRIVATE -D_USE_MATH_DEFINES)
-endif()
+set_target_properties(${PROJECT_NAME} PROPERTIES CXX_STANDARD_REQUIRED TRUE CXX_STANDARD 20)
 
 find_package(Vulkan REQUIRED)
 
-# FetchContent_Declare и FetchContent_MakeAvailable УДАЛЕНЫ отсюда
+FetchContent_Declare(
+	lodepng
+	GIT_REPOSITORY https://github.com/lvandeve/lodepng
+)
+
+FetchContent_MakeAvailable(lodepng)
 
 target_link_libraries(${PROJECT_NAME} veekay Vulkan::Headers)
 
 target_sources(${PROJECT_NAME} PRIVATE
-	${lodepng_SOURCE_DIR}/lodepng.cpp # Используем переменную из корня
+	${lodepng_SOURCE_DIR}/lodepng.cpp
 )
 
-# --- Обновите список include директорий ---
 target_include_directories(${PROJECT_NAME} PRIVATE
-	${lodepng_SOURCE_DIR}              # Используем переменную из корня
-	${tinyobjloader_SOURCE_DIR}        # Используем переменную из корня
+	${lodepng_SOURCE_DIR}
 )
-# --- Конец обновления ---
 
 # Compile shaders
 find_program(GLSLC_FOUND glslc)
@@ -54,6 +57,7 @@ if(GLSLC_FOUND)
 
 	compile_shader(shader.vert)
 	compile_shader(shader.frag)
+	compile_shader(shadow.vert)
 
 	add_custom_target(shaders DEPENDS ${_SHADER_BINARIES})
 	add_dependencies(${PROJECT_NAME} shaders)

@@ -10,50 +10,33 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 	$<INSTALL_INTERFACE:include>
 )
 
-if(LINUX)
-	target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
-elseif(APPLE)
-	target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
-elseif(MSVC)
-	target_compile_options(${PROJECT_NAME} PRIVATE /W4 /wd4201)
-	target_link_options(${PROJECT_NAME} PRIVATE /subsystem:windows /entry:mainCRTStartup)
-	target_compile_definitions(${PROJECT_NAME} PRIVATE -D_USE_MATH_DEFINES)
-else()
-	message(FATAL_ERROR "${CMAKE_SYSTEM_NAME} is not supported")
-endif()
+target_compile_options(${PROJECT_NAME} PRIVATE PRIVATE /W4)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES CXX_STANDARD_REQUIRED TRUE CXX_STANDARD 20)
 
 FetchContent_Declare(
 	glfw
-	GIT_REPOSITORY https://github.com/glfw/glfw.git  
+	GIT_REPOSITORY https://github.com/glfw/glfw.git
 	GIT_TAG 3.4
 )
 
 FetchContent_Declare(
 	vk-bootstrap
-	GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap  
+	GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
 	GIT_TAG v1.4.321
 )
 
 FetchContent_Declare(
 	imgui
-	GIT_REPOSITORY https://github.com/ocornut/imgui  
+	GIT_REPOSITORY https://github.com/ocornut/imgui
 	GIT_TAG v1.92.3
 )
 
-# --- Добавьте это в корень ---
 FetchContent_Declare(
-    lodepng
-    GIT_REPOSITORY https://github.com/lvandeve/lodepng
+		tinyobjloader
+		GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
+		GIT_TAG v2.0.0rc13
 )
-
-FetchContent_Declare(
-    tinyobjloader
-    GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
-    GIT_TAG v2.0.0rc13 # Или последний стабильный тег
-)
-# --- Конец добавления ---
 
 find_package(Vulkan REQUIRED)
 
@@ -62,9 +45,7 @@ set(GLFW_BUILD_EXAMPLES OFF)
 set(GLFW_BUILD_TESTS OFF)
 set(GLFW_BUILD_DOCS OFF)
 
-# --- Обновите список ---
-FetchContent_MakeAvailable(glfw vk-bootstrap imgui lodepng tinyobjloader) # Добавьте lodepng и tinyobjloader
-# --- Конец обновления ---
+FetchContent_MakeAvailable(glfw vk-bootstrap imgui tinyobjloader)
 
 add_subdirectory(testbed)
 
@@ -74,7 +55,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 	vk-bootstrap::vk-bootstrap
 )
 
-# Link ImGui
 target_include_directories(${PROJECT_NAME} PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 target_sources(${PROJECT_NAME} PRIVATE
 	${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
@@ -84,3 +64,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	${imgui_SOURCE_DIR}/imgui_tables.cpp
 	${imgui_SOURCE_DIR}/imgui_widgets.cpp
 )
+
+target_include_directories(${PROJECT_NAME} PUBLIC ${tinyobjloader_SOURCE_DIR})
+
+target_sources(${PROJECT_NAME} PRIVATE ${tinyobjloader_SOURCE_DIR}/tiny_obj_loader.cc)

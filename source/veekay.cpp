@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <climits>
-
 #include <iostream>
+
 #include <vector>
 
 #include <vulkan/vulkan_core.h>
@@ -68,20 +68,14 @@ std::vector<VkCommandBuffer> vk_command_buffers;
 
 namespace veekay {
 
-	Application app;
+Application app;
 
-	namespace input {
+namespace input {
 
-		void setup(void* const window_ptr);
-		void cache();
+void setup(void* const window_ptr);
+void cache();
 
-	} // namespace input
-
-	namespace graphics {
-
-		void init();
-
-	} // namespace graphics
+} // namespace input
 
 } // namespace veekay
 
@@ -105,10 +99,6 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 
 	veekay::input::setup(window);
 
-	/* NOTE:
-		needed because otherwise on macos everything will be rendered in the top
-		corner of the application window
-	*/
 #if defined(__APPLE__) && defined(__MACH__)
 	int framebuffer_width, framebuffer_height;
 	glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
@@ -123,12 +113,13 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 	{ // NOTE: Initialize Vulkan: grab device and create swapchain
 		vkb::InstanceBuilder instance_builder;
 
+		// === ИСПРАВЛЕНО: Vulkan 1.2 вместо 1.3 (Intel HD 620 поддерживает макс. 1.2) ===
 		auto builder_result = instance_builder.require_api_version(1, 2, 0)
 		                                      .request_validation_layers()
 		                                      .use_default_debug_messenger()
 		                                      .build();
 		if (!builder_result) {
-			std::cerr << builder_result.error().message() << '\n';
+			std::cerr << "Failed to create Vulkan instance: " << builder_result.error().message() << '\n';
 			return 1;
 		}
 
@@ -137,10 +128,28 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 		vk_instance = instance.instance;
 		vk_debug_messenger = instance.debug_messenger;
 
+		// === ОТЛАДКА: Вывод доступных GPU ===
+		std::cout << "=== Available Vulkan Devices ===" << std::endl;
+		uint32_t device_count = 0;
+		vkEnumeratePhysicalDevices(vk_instance, &device_count, nullptr);
+		std::vector<VkPhysicalDevice> devices(device_count);
+		vkEnumeratePhysicalDevices(vk_instance, &device_count, devices.data());
+		std::cout << "Found " << device_count << " device(s):" << std::endl;
+		for (uint32_t i = 0; i < device_count; i++) {
+			VkPhysicalDeviceProperties props;
+			vkGetPhysicalDeviceProperties(devices[i], &props);
+			std::cout << "  [" << i << "] " << props.deviceName 
+			          << " (Vulkan " << VK_API_VERSION_MAJOR(props.apiVersion) 
+			          << "." << VK_API_VERSION_MINOR(props.apiVersion) 
+			          << "." << VK_API_VERSION_PATCH(props.apiVersion) << ")" << std::endl;
+		}
+		std::cout << "=================================" << std::endl;
+		// ================================
+
 		if (glfwCreateWindowSurface(vk_instance, window, nullptr, &vk_surface) != VK_SUCCESS) {
 			const char* message;
 			glfwGetError(&message);
-			std::cerr << message << '\n';
+			std::cerr << "Failed to create window surface: " << message << '\n';
 			return 1;
 		}
 
@@ -150,11 +159,17 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 			.samplerAnisotropy = true,
 		};
 
+		// === ИСПРАВЛЕНО: Убрано требование VK_KHR_dynamic_rendering ===
+		// Intel HD 620 не поддерживает это расширение
 		auto selector_result = physical_device_selector.set_surface(vk_surface)
 		                                               .set_required_features(device_features)
 		                                               .select();
 		if (!selector_result) {
-			std::cerr << selector_result.error().message() << '\n';
+			std::cerr << "Failed to select physical device: " << selector_result.error().message() << '\n';
+			std::cerr << "Possible causes:" << std::endl;
+			std::cerr << "  - No Vulkan-compatible GPU found" << std::endl;
+			std::cerr << "  - GPU drivers are outdated" << std::endl;
+			std::cerr << "  - Required extensions not supported" << std::endl;
 			return 1;
 		}
 
@@ -166,7 +181,7 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 			auto result = device_builder.build();
 
 			if (!result) {
-				std::cerr << result.error().message() << '\n';
+				std::cerr << "Failed to create logical device: " << result.error().message() << '\n';
 				return 1;
 			}
 
@@ -176,7 +191,7 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 			vk_physical_device = device.physical_device;
 
 			auto queue_type = vkb::QueueType::graphics;
-			
+
 			vk_graphics_queue = device.get_queue(queue_type).value();
 			vk_graphics_queue_family = device.get_queue_index(queue_type).value();
 		}
@@ -197,7 +212,7 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 		                                         .build();
 
 		if (!swapchain_result) {
-			std::cerr << swapchain_result.error().message() << '\n';
+			std::cerr << "Failed to create swapchain: " << swapchain_result.error().message() << '\n';
 			return 1;
 		}
 
@@ -210,8 +225,6 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 		veekay::app.vk_device = vk_device;
 		veekay::app.vk_physical_device = vk_physical_device;
 	}
-
-	graphics::init();
 
 	{ // NOTE: ImGui initialization
 		IMGUI_CHECKVERSION();
@@ -378,6 +391,11 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 				vk_image_depth_format = f;
 				break;
 			}
+		}
+
+		if (vk_image_depth_format == VK_FORMAT_UNDEFINED) {
+			std::cerr << "Failed to find supported depth format\n";
+			return 1;
 		}
 	}
 
@@ -608,7 +626,7 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 
 	{ // NOTE: Allocate command buffers
 		vk_command_buffers.resize(vk_framebuffers.size());
-		
+
 		VkCommandBufferAllocateInfo info{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 			.commandPool = vk_command_pool,
@@ -664,7 +682,7 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 
 	while (veekay::app.running && !glfwWindowShouldClose(window)) {
 		veekay::input::cache();
-		
+
 		glfwPollEvents();
 		double time = glfwGetTime();
 
@@ -771,7 +789,7 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 		vkDestroySemaphore(vk_device, vk_render_semaphores[i], nullptr);
 		vkDestroyFence(vk_device, vk_in_flight_fences[i], nullptr);
 	}
-	
+
 	vkDestroyRenderPass(vk_device, vk_render_pass, nullptr);
 
 	vkDestroyImageView(vk_device, vk_image_depth_view, nullptr);
@@ -792,7 +810,7 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 	ImGui::DestroyContext();
 
 	vkDestroyDescriptorPool(vk_device, imgui_descriptor_pool, nullptr);
-	
+
 	vkDestroySwapchainKHR(vk_device, vk_swapchain, nullptr);
 	vkDestroyDevice(vk_device, nullptr);
 	vkDestroySurfaceKHR(vk_instance, vk_surface, nullptr);
@@ -801,6 +819,6 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 
 	glfwDestroyWindow(window);
 	glfwTerminate();
-	
+
 	return 0;
 }
